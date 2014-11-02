@@ -7,7 +7,12 @@ import Network.Simple.TCP (
 
 import Pipes.Concurrent
 
-import Data.Set (Set,empty,singleton)
+import Control.Concurrent.STM (
+    newTVarIO,TVar,readTVarIO,readTVar,writeTVar)
+
+import Data.Set (Set,empty,singleton,union)
+
+import Control.Monad (forever,unless)
 
 data Command = Command Time PlayerName Action
     deriving (Show,Read,Eq,Ord)
@@ -21,25 +26,38 @@ data Action = East | North | West | South | Connect
 
 main :: IO ()
 main = withSocketsDo (do
-    (messagesO,messagesI) <- spawn Single
-    (commandsO,commandsI) <- spawn (Latest empty)
+
+    (inboxO,inboxI) <- spawn Single
+    (outboxO,outboxI) <- spawn Single
+    commandsVar <- newTVarIO empty
+    connectionVar <- newTVarIO empty
+
+    forkIO (forever (atomically (do
+            Just incomingCommands <- recv inboxI
+            currentCommands <- readTVar commandsVar
+            let newCommands = union incomingCommands currentCommands
+            unless (newCommands == currentCommands) (do
+                writeTVar commandsVar newCommands
+                send outboxO newCommands
+                return ()))))
+
     playIO
         (InWindow "Kosoban" (600,600) (100,200))
         white
         20
         ()
-        (render commandsI)
-        (handle messagesO)
+        (render commandsVar)
+        (handle inboxO)
         (const return))
 
-render :: Input (Set Command) -> () -> IO Picture
-render commandsI () = do
-    commands <- atomically (recv commandsI)
+render :: TVar (Set Command) -> () -> IO Picture
+render commandsVar () = do
+    commands <- readTVarIO commandsVar
     return (circle 20)
 
 handle :: Output (Set Command) -> Event -> () -> IO ()
-handle messagesO event () = do
+handle inboxO event () = do
     let command = undefined
-    atomically (send messagesO (singleton command))
+    atomically (send inboxO (singleton command))
     return ()
 
