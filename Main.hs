@@ -2,11 +2,12 @@ module Main where
 
 import Graphics.Gloss.Interface.IO.Game
 
-import Network.Simple.TCP
+import Network.Simple.TCP (
+    withSocketsDo)
 
-import Control.Concurrent.STM
+import Pipes.Concurrent
 
-import Data.Set (Set,empty)
+import Data.Set (Set,empty,singleton)
 
 data Command = Command Time PlayerName Action
     deriving (Show,Read,Eq,Ord)
@@ -20,22 +21,25 @@ data Action = East | North | West | South | Connect
 
 main :: IO ()
 main = withSocketsDo (do
-    commandsVar <- atomically (newTVar empty)
-    commandVar <- atomically newEmptyTMVar
+    (messagesO,messagesI) <- spawn Single
+    (commandsO,commandsI) <- spawn (Latest empty)
     playIO
         (InWindow "Kosoban" (600,600) (100,200))
         white
         20
         ()
-        (const (fmap render (atomically (readTVar commandVar))))
-        (handle commandVar
-        step)
+        (render commandsI)
+        (handle messagesO)
+        (const return))
 
-render :: Set Command -> Picture
-render = undefined
+render :: Input (Set Command) -> () -> IO Picture
+render commandsI () = do
+    commands <- atomically (recv commandsI)
+    return (circle 20)
 
-handle :: Event -> () -> IO ()
-handle = undefined
+handle :: Output (Set Command) -> Event -> () -> IO ()
+handle messagesO event () = do
+    let command = undefined
+    atomically (send messagesO (singleton command))
+    return ()
 
-step :: Float -> () -> IO ()
-step = undefined
