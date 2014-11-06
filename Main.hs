@@ -5,7 +5,8 @@ import Graphics.Gloss.Interface.IO.Game
 
 import Network.Simple.TCP (
     withSocketsDo,
-    serve,HostPreference(HostAny))
+    serve,HostPreference(HostAny),HostName,
+    connect)
 
 import Pipes.Network.TCP (toSocket,fromSocket)
 
@@ -21,12 +22,12 @@ import Data.ByteString.Lazy (toStrict,fromStrict)
 import Control.Concurrent.STM (
     newTVarIO,TVar,readTVarIO,readTVar,writeTVar,modifyTVar)
 
-import Data.Set (Set,empty,singleton,union)
+import Data.Set (Set,empty,singleton,union,insert,toList)
 import Data.Maybe (fromJust)
 
 import GHC.Generics (Generic)
 
-import Control.Monad (forever,unless)
+import Control.Monad (forever,unless,forM_)
 import Data.Monoid (mconcat)
 
 data Command = Command Time PlayerName Action
@@ -46,15 +47,22 @@ instance Binary Action
 main :: IO ()
 main = withSocketsDo (do
 
+    let address = "127.0.0.1"
+
     (inboxO,inboxI) <- spawn Single
     (outboxO,outboxI) <- spawn Single
     commandV <- newTVarIO empty
-    peerV <- newTVarIO []
-    outputV <- newTVarIO [] 
+    outputV <- newTVarIO []
 
     forkIO (updateCommands inboxI outboxO commandV)
 
     forkIO (serveOutputs outboxI outputV)
+
+    peers <- establishConnection address
+
+    peerV <- newTVarIO peers
+
+    forM_ (toList peers) (establishConnection)
 
     forkIO (acceptConnections peerV outputV inboxO)
 
@@ -94,10 +102,22 @@ serveOutputs outboxI outputV = forever (do
     outputs <- readTVarIO outputV
     atomically (send (mconcat outputs) commands))
 
-acceptConnections :: TVar [()] -> TVar [Output (Set Command)] -> Output (Set Command) -> IO ()
-acceptConnections peersV outputsV inboxO = serve HostAny "3894" (\(socket,sockAddr) -> do
+acceptConnections :: TVar (Set HostName) -> TVar [Output (Set Command)] -> Output (Set Command) -> IO ()
+acceptConnections peerV outputsV inboxO = serve HostAny "3894" (\(socket,sockAddr) -> do
     (connectionO,connectionI) <- spawn Single
-    forkIO (runEffect (fromInput connectionI >-> Pipes.map (toStrict . encode) >-> toSocket socket))
-    forkIO (runEffect (fromSocket socket 4096 >-> Pipes.map (fromJust . decode . fromStrict) >-> toOutput inboxO))
+    peers <- readTVarIO peerV
+    forkIO (runEffect ((do
+        yield (toStrict (encode peers))
+        fromInput connectionI >-> Pipes.map (toStrict . encode)) >-> toSocket socket))
+    forkIO (runEffect (
+        fromSocket socket 4096 >-> Pipes.map (fromJust . decode . fromStrict) >-> toOutput inboxO))
+    atomically (modifyTVar peerV (insert (show sockAddr)))
     atomically (modifyTVar outputsV (connectionO:)))
 
+establishConnection :: HostName -> IO (Set HostName)
+establishConnection address = connect address "3894" (\(socket,sockAddr) -> do
+    forkIO (runEffect (undefined))
+    return undefined)
+
+getPeers :: HostName -> IO (Set host)
+getPeers = undefined
